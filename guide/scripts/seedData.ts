@@ -9,6 +9,160 @@ import {
   closeModal,
 } from './captureUtils';
 
+/** Clean all existing data (students + whiteboard) so we start fresh */
+export async function cleanData(page: Page, password: string) {
+  console.log('\n🧹 Cleaning existing data...');
+
+  // Wait for Firebase data to fully load — poll until student count stabilizes
+  console.log('  ⏳ Waiting for Firebase data to load...');
+  await delay(2000);
+  let prevCount = -1;
+  for (let i = 0; i < 5; i++) {
+    const currentCount = await page.evaluate(() => {
+      const match = document.body.innerText.match(/學生名單\s*\((\d+)\)/);
+      return match ? parseInt(match[1], 10) : 0;
+    });
+    if (currentCount === prevCount && i > 0) break; // stabilized
+    prevCount = currentCount;
+    await delay(1500);
+  }
+  const studentCount = prevCount;
+
+  if (studentCount > 0) {
+    // Step 1: Clear whiteboard FIRST (before deleting students, since whiteboard only shows when students exist)
+    console.log('  📝 Clearing whiteboard...');
+    await goToDashboard(page);
+    await delay(1000);
+
+    // Click "編輯" button on whiteboard (only exists when not viewing a student)
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        if (btn.textContent?.trim() === '編輯' && (btn as HTMLElement).offsetParent !== null) {
+          (btn as HTMLElement).click();
+          return;
+        }
+      }
+    });
+    await delay(800);
+
+    // Clear the textarea
+    await page.evaluate(() => {
+      const ta = document.querySelector('textarea');
+      if (ta) {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype, 'value'
+        )!.set!;
+        nativeInputValueSetter.call(ta, '');
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    await delay(500);
+
+    // Click "儲存" — use page.evaluate to ensure we click the right button
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        if (btn.textContent?.trim() === '儲存' && (btn as HTMLElement).offsetParent !== null) {
+          (btn as HTMLElement).click();
+          return;
+        }
+      }
+    });
+    await delay(1000);
+    console.log('  ✅ Whiteboard cleared');
+
+    // Step 2: Delete all students via Student Manager
+    console.log('  🗑️  Deleting all students...');
+    await page.evaluate(() => {
+      const btn = document.querySelector('[title="管理學生"]') as HTMLElement;
+      if (btn) btn.click();
+    });
+    await delay(1000);
+
+    // Wait for the Student Manager modal
+    await page.waitForSelector('.fixed.inset-0.z-50', { timeout: 10000 });
+    await delay(500);
+
+    // Click the select-all checkbox button
+    // It's a button with p-2 class containing a Square/CheckSquare SVG icon
+    // Located in the modal content area (not the header X button)
+    await page.evaluate(() => {
+      const modal = document.querySelector('.fixed.inset-0.z-50');
+      if (!modal) return;
+      // Get the content area (the scrollable div after the header)
+      const contentArea = modal.querySelector('.max-h-\\[80vh\\]') || modal.querySelector('.p-6');
+      if (!contentArea) return;
+      const buttons = contentArea.querySelectorAll('button');
+      for (const btn of buttons) {
+        const svg = btn.querySelector('svg');
+        const rect = btn.getBoundingClientRect();
+        // Select-all is a small icon button (p-2 = ~36px)
+        if (svg && rect.width > 0 && rect.width < 60 && rect.height < 60) {
+          (btn as HTMLElement).click();
+          return;
+        }
+      }
+    });
+    await delay(800);
+
+    // Verify selection — wait for "已選擇" text
+    await page.waitForFunction(
+      () => document.body.innerText.includes('已選擇'),
+      { timeout: 5000 }
+    );
+    console.log('  ✅ All students selected');
+
+    // Click the "刪除" button (red, contains Trash2 icon)
+    await page.evaluate(() => {
+      const modal = document.querySelector('.fixed.inset-0.z-50');
+      if (!modal) return;
+      const buttons = modal.querySelectorAll('button');
+      for (const btn of buttons) {
+        const text = btn.textContent?.trim() || '';
+        if (text.includes('刪除') && !text.includes('確認') && (btn as HTMLElement).offsetParent !== null) {
+          (btn as HTMLElement).click();
+          return;
+        }
+      }
+    });
+    await delay(800);
+
+    // Enter password in the confirmation modal
+    await page.waitForSelector('input[type="password"]', { timeout: 10000 });
+    await delay(300);
+    // Use nativeInputValueSetter to set the password (type() can fail with React controlled inputs)
+    await page.evaluate((pwd) => {
+      const input = document.querySelector('input[type="password"]') as HTMLInputElement;
+      if (input) {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype, 'value'
+        )!.set!;
+        nativeInputValueSetter.call(input, pwd);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, password);
+    await delay(500);
+
+    // Click "確認刪除"
+    await clickByText(page, '確認刪除');
+    await delay(3000);
+
+    // Wait for empty state
+    await page.waitForFunction(
+      () => document.body.innerText.includes('立即匯入學生名單'),
+      { timeout: 15000 }
+    );
+    console.log('  ✅ All students deleted');
+  } else {
+    console.log('  ℹ️  No students to delete (empty account)');
+  }
+
+  console.log('✅ Clean complete!\n');
+}
+
 const STUDENT_LIST = `王小明
 李美玲
 張志豪
@@ -52,7 +206,11 @@ async function importStudents(page: Page) {
     // Switch to "批次匯入" tab
     await clickByText(page, '批次匯入');
   }
-  await delay(800);
+  await delay(1000);
+
+  // Wait for the modal to appear
+  await page.waitForSelector('.fixed.inset-0.z-50', { timeout: 10000 });
+  await delay(500);
 
   // Wait for textarea to appear in the modal
   await page.waitForSelector('textarea', { timeout: 10000 });
@@ -141,12 +299,18 @@ async function writeWhiteboard(page: Page) {
   await clickByText(page, '編輯');
   await delay(500);
 
-  // Find the textarea and type some content
-  const textarea = await page.$('textarea');
-  if (textarea) {
-    await textarea.click();
-    await textarea.type('今日作業：國語習作 P.30-31\n明天帶美勞材料\n週五校外教學，記得穿運動服', { delay: 10 });
-  }
+  // Set textarea content using nativeInputValueSetter (replace, not append)
+  await page.evaluate(() => {
+    const ta = document.querySelector('textarea');
+    if (ta) {
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, 'value'
+      )!.set!;
+      nativeInputValueSetter.call(ta, '今日作業：國語習作 P.30-31\n明天帶美勞材料\n週五校外教學，記得穿運動服');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
   await delay(300);
 
   // Click "儲存" button

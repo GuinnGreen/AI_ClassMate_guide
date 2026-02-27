@@ -2,7 +2,7 @@ import puppeteer from 'puppeteer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { login, setupViewport, delay } from './captureUtils';
-import { seedData } from './seedData';
+import { cleanData, seedData } from './seedData';
 import { captureQuickStart } from './scenes/quickStart';
 import { captureStudentMgmt } from './scenes/studentMgmt';
 import { captureBehavior } from './scenes/behavior';
@@ -49,25 +49,9 @@ async function main() {
     await login(page, TEST_EMAIL, TEST_PASSWORD);
     console.log('✅ Logged in successfully\n');
 
-    // Step 2: Check if we need to seed data
-    const hasStudents = await page.evaluate(() => {
-      return document.body.innerText.includes('王小明');
-    });
-
-    if (!hasStudents) {
-      // Check if the "立即匯入學生名單" button exists (empty state)
-      const isEmpty = await page.evaluate(() => {
-        return document.body.innerText.includes('立即匯入學生名單');
-      });
-
-      if (isEmpty) {
-        await seedData(page);
-      } else {
-        console.log('⚠️  Students exist but 王小明 not found. Proceeding anyway...\n');
-      }
-    } else {
-      console.log('📋 Students already seeded, skipping seed step.\n');
-    }
+    // Step 2: Clean all existing data then seed fresh
+    await cleanData(page, TEST_PASSWORD);
+    await seedData(page);
 
     // Step 3: Capture all scenes
     const allResults = [];
