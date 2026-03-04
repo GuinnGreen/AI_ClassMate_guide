@@ -2,45 +2,56 @@ import type { Page } from 'puppeteer';
 import {
   highlight, highlightByText, highlightByTitle, removeHighlight,
   captureScene, delay, clickByText, clickStudent, goToDashboard, closeModal,
+  login, logout,
   type SceneResult,
 } from '../captureUtils';
+
+const TEST_EMAIL = 'test_demo@school.com';
+const TEST_PASSWORD = '123456';
 
 export async function captureQuickStart(page: Page, outputDir: string): Promise<SceneResult[]> {
   console.log('\n🎬 QuickStart scenes...');
   const results: SceneResult[] = [];
 
-  // Scene 1: Registration page — show login form with "註冊" tab highlighted
+  // Scene 1: Registration page — show unauthenticated login/register page
   results.push(await captureScene(page, 'quick-start', 1, [
     async () => {
-      // Navigate to login page by going to a clean URL (we're already logged in, so we screenshot as-is or go back)
-      // For this scene, we'll just capture the login page appearance
-      // Since we're logged in, we'll screenshot current state with highlight on sidebar
-      await removeHighlight(page);
-      // We need the login page - let's just note this is the initial state
-      // Actually, capture the sidebar with student list overview
-      await highlightByText(page, '學生名單');
+      // Logout to reach the unauthenticated login page
+      await logout(page);
+      // Frame 1: login page with "登入"/"註冊" tab buttons visible
     },
     async () => {
-      await removeHighlight(page);
+      // Click "註冊" tab to show registration form
+      await clickByText(page, '註冊');
+      await delay(500);
+      // Frame 2: registration form with confirm-password field
     },
   ], outputDir));
 
-  // Scene 2: Add students — highlight "管理學生" button
+  // Restore logged-in state for remaining scenes
+  await login(page, TEST_EMAIL, TEST_PASSWORD);
+
+  // Scene 2: Batch import modal — show semester date fields and import button
   results.push(await captureScene(page, 'quick-start', 2, [
-    async () => {
-      await removeHighlight(page);
-      await highlightByTitle(page, '管理學生');
-    },
     async () => {
       await removeHighlight(page);
       // Open the student manager
       await page.click('[title="管理學生"]');
       await delay(600);
-      await highlightByText(page, '批次匯入');
+      // Switch to batch import tab
+      await clickByText(page, '批次匯入');
+      await delay(400);
+      // Frame 1: highlight semester date fields
+      await highlightByText(page, '學期期間設定');
     },
     async () => {
       await removeHighlight(page);
-      // Close modal by clicking X button (Modal doesn't support Escape key)
+      // Frame 2: highlight confirm import button
+      await highlightByText(page, '確認匯入');
+    },
+    async () => {
+      await removeHighlight(page);
+      // Frame 3: close modal
       await closeModal(page);
       await delay(400);
     },

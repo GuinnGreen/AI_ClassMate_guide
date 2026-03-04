@@ -206,6 +206,21 @@ export async function closeModal(page: Page) {
   await delay(400);
 }
 
+/** Logout: clear auth state and navigate back to login page */
+export async function logout(page: Page) {
+  await page.evaluate(async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    const dbs = await indexedDB.databases();
+    for (const db of dbs) {
+      if (db.name) indexedDB.deleteDatabase(db.name);
+    }
+  });
+  await page.goto('http://localhost:3000', { waitUntil: 'networkidle2' });
+  await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+  await delay(800);
+}
+
 /** Navigate back to dashboard (whiteboard) by clicking "主畫面" */
 export async function goToDashboard(page: Page) {
   // First close any open modals
