@@ -1,5 +1,5 @@
 import type { Page } from 'puppeteer';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -207,11 +207,17 @@ export function combineToWebP(frames: string[], output: string, frameDurationMs 
   args.push('-o', output);
 
   try {
-    execSync(`img2webp ${args.map(a => `"${a}"`).join(' ')}`, { stdio: 'pipe' });
-    console.log(`  ✅ ${path.basename(output)} (${(fs.statSync(output).size / 1024).toFixed(0)}KB)`);
+    execFileSync('img2webp', args, { stdio: 'pipe' });
+    const outputSize = fs.statSync(output).size;
+    if (outputSize <= 0) throw new Error('empty WebP artifact');
+    console.log(`  ✅ ${path.basename(output)} (${(outputSize / 1024).toFixed(0)}KB)`);
   } catch (err: unknown) {
-    const e = err as { stderr?: Buffer };
-    console.error(`  ❌ Failed to create ${path.basename(output)}: ${e.stderr?.toString()}`);
+    const e = err as { stderr?: Buffer; message?: string };
+    const detail = e.stderr?.toString().trim() || e.message;
+    throw new Error(
+      `Failed to create ${path.basename(output)}${detail ? `: ${detail}` : ''}`,
+      { cause: err },
+    );
   }
 }
 

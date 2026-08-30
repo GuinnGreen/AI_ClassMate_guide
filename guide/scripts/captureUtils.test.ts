@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import type { Page } from 'puppeteer';
 import {
   AUTH_EMULATOR_URL,
   assertSafeCaptureEnvironment,
+  captureScene,
+  combineToWebP,
   login,
   provisionDemoAuthEmulatorAccount,
 } from './captureUtils.ts';
@@ -198,4 +203,52 @@ test('Auth provisioning refuses a remote endpoint before fetch', async () => {
     /Auth provisioning refused/,
   );
   assert.equal(requestCount, 0);
+});
+
+test('capture scene rejects an encoder failure and preserves its diagnostic frames', async () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-encode-failure-'));
+  const previousPath = process.env.PATH;
+  process.env.PATH = '/nonexistent-classmate-guide-bin';
+  const page = {
+    screenshot: async ({ path: framePath }: { path: string }) => {
+      fs.writeFileSync(framePath, 'diagnostic-frame');
+    },
+  } as unknown as Page;
+
+  try {
+    await assert.rejects(
+      captureScene(page, 'encoder-failure', 1, [async () => undefined], outputDir),
+      /Failed to create encoder-failure-1\.webp/,
+    );
+    assert.equal(
+      fs.existsSync(path.join(outputDir, '__frames__', 'encoder-failure-1-frame0.png')),
+      true,
+    );
+    assert.equal(fs.existsSync(path.join(outputDir, 'encoder-failure-1.webp')), false);
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('WebP encoding rejects a successful process that produced an empty artifact', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-empty-webp-'));
+  const encoderPath = path.join(tempDir, 'img2webp');
+  const framePath = path.join(tempDir, 'frame.png');
+  const outputPath = path.join(tempDir, 'output.webp');
+  const previousPath = process.env.PATH;
+  fs.writeFileSync(encoderPath, '#!/bin/sh\nfor output; do :; done\n: > "$output"\n');
+  fs.chmodSync(encoderPath, 0o755);
+  fs.writeFileSync(framePath, 'frame');
+  process.env.PATH = tempDir;
+
+  try {
+    assert.throws(
+      () => combineToWebP([framePath], outputPath),
+      /empty WebP artifact/,
+    );
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
