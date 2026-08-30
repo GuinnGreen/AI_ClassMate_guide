@@ -4,66 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-Monorepo for a master's thesis project. Two independent sub-projects:
+Tutorial/documentation website for [ClassMate AI 智慧班級經營系統](https://ai-classmate.com), a master's thesis project. Deployed at [ai-classmate.com/guide](https://ai-classmate.com/guide).
 
-- **`classmate-ai---智慧班級經營系統/`** — The main ClassMate AI application (classroom management SPA for Taiwan elementary teachers). Has its own detailed `CLAUDE.md` inside.
-- **`guide/`** — Tutorial/documentation website deployed at `/guide/` subpath.
-
-Both projects are built and deployed together to GitHub Pages via `.github/workflows/deploy.yml` on push to `main`.
+The main ClassMate AI app lives in a **separate repo** — the `classmate-ai---智慧班級經營系統/` directory exists locally but is `.gitignore`'d. This repo only tracks the guide website under `guide/`.
 
 ## Development Commands
 
-Each project has its own `package.json`. Run commands from their respective directories.
-
-### Main App (`classmate-ai---智慧班級經營系統/`)
-
-```bash
-npm install
-npm run dev          # http://localhost:3000
-npm run build        # Output: ./dist
-npx tsc --noEmit     # Type-check (no lint/test configured)
-```
-
-See `classmate-ai---智慧班級經營系統/CLAUDE.md` for full architecture, environment setup, and conventions.
-
-### Guide Website (`guide/`)
+Run from the `guide/` directory:
 
 ```bash
 npm install
 npm run dev          # http://localhost:3001
-npm run build        # Output: ./dist
-npm run capture      # Generate animated WebP screenshots (requires main app at localhost:3000)
+npm run build        # Output: guide/dist
+npx tsc --noEmit     # Type-check (no lint/test configured)
+npm run capture      # Generate animated WebP screenshots (requires main app running at localhost:3000)
 ```
 
-## Guide Architecture
+## Architecture
 
-React 19 + TypeScript + Vite + Tailwind CSS 4 + React Router 7. Base path is `/guide/` (set in `vite.config.ts`).
+React 19 + TypeScript + Vite + Tailwind CSS 4 (`@tailwindcss/vite` plugin, no `tailwind.config.js`) + React Router 7.
+
+### Key Decisions
+
+- **HashRouter** (not BrowserRouter) — required for GitHub Pages to serve the single HTML file at `/guide/`.
+- **Base path** `/guide/` — set in `vite.config.ts`. All assets resolve relative to this.
+- **Path alias** `@guide` maps to the `guide/` directory root.
+- **Theme system** — mirrors the main app: `constants/theme.ts` defines `LIGHT_THEME`/`DARK_THEME` palettes, consumed via `ThemeContext`. Components use `useTheme()` for colors rather than Tailwind color classes.
+- **No backend** — static site, no Firebase or API calls in the guide itself.
+
+### Source Layout
 
 | Path | Purpose |
 |------|---------|
-| `guide/pages/` | Route-level pages (landing, quick start, FAQ, 9 feature tutorials) |
-| `guide/components/` | Shared layout components (`Layout`, `GuideSidebar`, `TutorialStep`, `CalloutBox`, `FeatureCard`, `ImageViewer`) |
-| `guide/scripts/` | Puppeteer screenshot automation (`capture.ts` orchestrates `seedData.ts` + `scenes/`) |
-| `guide/public/images/` | Generated animated WebP images used in tutorial pages |
-| `guide/contexts/ThemeContext.tsx` | Same light/dark theme system as the main app |
-| `guide/constants/theme.ts` | Same `ThemePalette` definitions as the main app |
+| `guide/App.tsx` | Root: HashRouter with all routes |
+| `guide/pages/` | Route-level pages (landing, quick start, FAQ, 9 feature tutorials at `/tutorial/*`) |
+| `guide/components/` | Shared layout: `Layout`, `GuideSidebar`, `TutorialStep`, `CalloutBox`, `FeatureCard`, `ImageViewer` |
+| `guide/scripts/` | Puppeteer screenshot automation |
+| `guide/public/images/` | Generated animated WebP images used in tutorials |
 
-### Screenshot Generation Flow (`npm run capture`)
+### Screenshot Generation (`npm run capture`)
 
-1. Logs in to test account (`test_demo@school.com` / `123456`) against the main app at `localhost:3000`
+Uses Puppeteer via `tsx scripts/capture.ts` to automate the **main app** (must be running at `localhost:3000`):
+
+1. Logs in with test account (`test_demo@school.com` / `123456`)
 2. Clears all existing Firestore data (students + whiteboard)
-3. Seeds 8 sample students with behavior records
-4. Iterates through `scripts/scenes/` — each scene captures animated WebP frames for one feature
+3. Seeds 8 sample students with behavior records (`scripts/seedData.ts`)
+4. Runs each scene in `scripts/scenes/` — each captures animated WebP frames for one feature
 5. Outputs to `public/images/`
 
-### Routing
+## Conventions
 
-Uses `HashRouter` (not `BrowserRouter`) so GitHub Pages serves the single HTML file correctly at `/guide/`.
+- All UI text is in **Traditional Chinese (繁體中文)**.
+- Commit messages are in Chinese with conventional-commit-style prefixes (`feat:`, `fix:`, `chore:`, `docs:`).
 
 ## Deployment
 
-GitHub Actions builds both projects and merges outputs:
-- Main app (`classmate-ai---智慧班級經營系統/dist/`) → root of GitHub Pages
-- Guide (`guide/dist/`) → `/guide/` subpath of GitHub Pages
-
-All AI/Firebase secrets are injected as build-time env vars in CI.
+GitHub Actions auto-deploys to GitHub Pages on push to `main`. The guide site is served at the `/guide/` subpath.

@@ -1,0 +1,278 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import type { Page } from 'puppeteer';
+import {
+  AUTH_EMULATOR_URL,
+  assertSafeCaptureEnvironment,
+  captureScene,
+  combineToWebP,
+  login,
+  provisionDemoAuthEmulatorAccount,
+} from './captureUtils.ts';
+
+type Markers = Record<string, string | undefined>;
+
+async function evaluateWithDocument<TResult>(
+  markers: Markers,
+  pageFunction: () => TResult | Promise<TResult>,
+): Promise<TResult> {
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { documentElement: { dataset: markers } },
+  });
+
+  try {
+    return await pageFunction();
+  } finally {
+    if (originalDocument) {
+      Object.defineProperty(globalThis, 'document', originalDocument);
+    } else {
+      delete (globalThis as { document?: unknown }).document;
+    }
+  }
+}
+
+function fakePage(markers: Markers): Page {
+  return {
+    evaluate: async (pageFunction: () => unknown) => evaluateWithDocument(markers, pageFunction),
+  } as unknown as Page;
+}
+
+async function expectCaptureRefusal(
+  markers: Markers,
+  expectedMessage: string,
+) {
+  await assert.rejects(
+    assertSafeCaptureEnvironment(fakePage(markers)),
+    (error: unknown) => {
+      assert.equal(error instanceof Error, true);
+      assert.equal((error as Error).message, expectedMessage);
+      return true;
+    },
+  );
+}
+
+function fakeLoginPage(markers: Markers) {
+  const calls: string[] = [];
+  const page = {
+    goto: async () => { calls.push('goto'); },
+    evaluate: async (pageFunction: () => unknown) => {
+      calls.push('evaluate');
+      return evaluateWithDocument(markers, pageFunction);
+    },
+    waitForSelector: async () => { calls.push('waitForSelector'); },
+    type: async (selector: string) => { calls.push(`type:${selector}`); },
+    click: async () => { calls.push('click'); },
+    waitForFunction: async () => { calls.push('waitForFunction'); },
+  } as unknown as Page;
+
+  return { calls, page };
+}
+
+test('allows capture only for development with Firebase emulators explicitly enabled', async () => {
+  await assertSafeCaptureEnvironment(fakePage({
+    appEnvironment: 'development',
+    firebaseEmulators: 'true',
+  }));
+});
+
+test('refuses capture in production even when the emulator marker is true', async () => {
+  await expectCaptureRefusal(
+    { appEnvironment: 'production', firebaseEmulators: 'true' },
+    'Capture refused: expected development + Firebase emulators, received {"appEnvironment":"production","firebaseEmulators":"true"}',
+  );
+});
+
+test('refuses capture when the emulator marker is not literally true', async () => {
+  await expectCaptureRefusal(
+    { appEnvironment: 'development', firebaseEmulators: 'false' },
+    'Capture refused: expected development + Firebase emulators, received {"appEnvironment":"development","firebaseEmulators":"false"}',
+  );
+});
+
+test('refuses capture when environment markers are missing', async () => {
+  await expectCaptureRefusal(
+    {},
+    'Capture refused: expected development + Firebase emulators, received {}',
+  );
+});
+
+test('login rejects production before selectors, credentials, or other post-navigation work', async () => {
+  const { calls, page } = fakeLoginPage({
+    appEnvironment: 'production',
+    firebaseEmulators: 'true',
+  });
+  let provisionRequests = 0;
+
+  await assert.rejects(
+    login(page, 'placeholder@example.invalid', 'placeholder-password', {
+      fetchImpl: async () => {
+        provisionRequests++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
+    { message: 'Capture refused: expected development + Firebase emulators, received {"appEnvironment":"production","firebaseEmulators":"true"}' },
+  );
+  assert.deepEqual(calls, ['goto', 'evaluate']);
+  assert.equal(provisionRequests, 0);
+});
+
+test('login rejects missing markers before selectors, credentials, or other post-navigation work', async () => {
+  const { calls, page } = fakeLoginPage({});
+  let provisionRequests = 0;
+
+  await assert.rejects(
+    login(page, 'placeholder@example.invalid', 'placeholder-password', {
+      fetchImpl: async () => {
+        provisionRequests++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
+    { message: 'Capture refused: expected development + Firebase emulators, received {}' },
+  );
+  assert.deepEqual(calls, ['goto', 'evaluate']);
+  assert.equal(provisionRequests, 0);
+});
+
+test('safe login provisions the Auth Emulator account before typing credentials', async () => {
+  const { calls, page } = fakeLoginPage({
+    appEnvironment: 'development',
+    firebaseEmulators: 'true',
+  });
+  const fetchImpl = async (url: string, init?: RequestInit) => {
+    calls.push('provision');
+    assert.equal(url, `${AUTH_EMULATOR_URL}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-classmate-ai`);
+    assert.equal(init?.method, 'POST');
+    assert.equal(init?.redirect, 'error');
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      email: 'test_demo@school.com',
+      password: '123456',
+      returnSecureToken: false,
+    });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ localId: 'demo-user' }),
+    };
+  };
+
+  await login(page, 'test_demo@school.com', '123456', {
+    fetchImpl,
+    postLoginDelayMs: 0,
+  });
+
+  assert.deepEqual(calls.slice(0, 6), [
+    'goto',
+    'evaluate',
+    'provision',
+    'waitForSelector',
+    'type:input[type="email"]',
+    'type:input[type="password"]',
+  ]);
+});
+
+test('Auth Emulator provisioning tolerates an existing demo account', async () => {
+  let requestCount = 0;
+  await provisionDemoAuthEmulatorAccount('test_demo@school.com', '123456', {
+    fetchImpl: async () => {
+      requestCount++;
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: 'EMAIL_EXISTS' } }),
+      };
+    },
+  });
+  assert.equal(requestCount, 1);
+});
+
+test('Auth provisioning refuses a remote endpoint before fetch', async () => {
+  let requestCount = 0;
+  await assert.rejects(
+    provisionDemoAuthEmulatorAccount('test_demo@school.com', '123456', {
+      authEmulatorUrl: 'https://identitytoolkit.googleapis.com',
+      fetchImpl: async () => {
+        requestCount++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
+    /Auth provisioning refused/,
+  );
+  assert.equal(requestCount, 0);
+});
+
+test('capture scene rejects an encoder failure and preserves its diagnostic frames', async () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-encode-failure-'));
+  const previousPath = process.env.PATH;
+  process.env.PATH = '/nonexistent-classmate-guide-bin';
+  const page = {
+    screenshot: async ({ path: framePath }: { path: string }) => {
+      fs.writeFileSync(framePath, 'diagnostic-frame');
+    },
+  } as unknown as Page;
+
+  try {
+    await assert.rejects(
+      captureScene(page, 'encoder-failure', 1, [async () => undefined], outputDir),
+      /Failed to create encoder-failure-1\.webp/,
+    );
+    assert.equal(
+      fs.existsSync(path.join(outputDir, '__frames__', 'encoder-failure-1-frame0.png')),
+      true,
+    );
+    assert.equal(fs.existsSync(path.join(outputDir, 'encoder-failure-1.webp')), false);
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('WebP encoding rejects a successful process that produced an empty artifact', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-empty-webp-'));
+  const encoderPath = path.join(tempDir, 'img2webp');
+  const framePath = path.join(tempDir, 'frame.png');
+  const outputPath = path.join(tempDir, 'output.webp');
+  const previousPath = process.env.PATH;
+  fs.writeFileSync(encoderPath, '#!/bin/sh\nfor output; do :; done\n: > "$output"\n');
+  fs.chmodSync(encoderPath, 0o755);
+  fs.writeFileSync(framePath, 'frame');
+  process.env.PATH = tempDir;
+
+  try {
+    assert.throws(
+      () => combineToWebP([framePath], outputPath),
+      /empty WebP artifact/,
+    );
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('WebP encoding cannot mistake an existing artifact for fresh encoder output', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-stale-webp-'));
+  const encoderPath = path.join(tempDir, 'img2webp');
+  const framePath = path.join(tempDir, 'frame.png');
+  const outputPath = path.join(tempDir, 'output.webp');
+  const previousPath = process.env.PATH;
+  fs.writeFileSync(encoderPath, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(encoderPath, 0o755);
+  fs.writeFileSync(framePath, 'frame');
+  fs.writeFileSync(outputPath, 'known-good-previous-artifact');
+  process.env.PATH = tempDir;
+
+  try {
+    assert.throws(
+      () => combineToWebP([framePath], outputPath),
+      /missing WebP artifact/,
+    );
+    assert.equal(fs.readFileSync(outputPath, 'utf8'), 'known-good-previous-artifact');
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

@@ -11,19 +11,18 @@
 
 ## 開發
 
+請使用 Node.js 20。
+
 ```bash
 # 安裝依賴
 cd guide
-npm install
+npm ci
 
 # 啟動開發伺服器 (localhost:3001)
 npm run dev
 
-# 產生截圖（需要主 App 在 localhost:3000 運行）
-npm run capture
-
-# 建置
-npm run build
+# 型別檢查、capture guard 測試與建置
+npm run verify
 ```
 
 ## 專案結構
@@ -46,7 +45,32 @@ guide/
 
 ## 截圖流程
 
-`npm run capture` 會自動：
+Capture 會清除並重建示範資料，因此只能連到本機 Firebase Emulator。全新 emulator 的完整流程如下：
+
+1. 在主 App checkout 使用 Node.js 20 安裝依賴，並啟動明確指定 `demo-classmate-ai` 的 Auth、Firestore 與 Functions Emulator：
+
+   ```bash
+   npm ci
+   npm run emulators
+   ```
+
+2. 在主 App checkout 的另一個終端啟動 test mode；頁面必須位於 `http://localhost:3000`，並顯示 development + emulator 標記：
+
+   ```bash
+   npm run dev -- --mode test
+   ```
+
+3. 在本 Guide checkout 的另一個終端執行 capture：
+
+   ```bash
+   cd guide
+   npm ci
+   npm run capture
+   ```
+
+Capture 會先驗證主 App 的安全標記，驗證通過後才向 `http://127.0.0.1:9099` 的 Auth Emulator 建立示範帳號 `test_demo@school.com`（密碼 `123456`）。帳號已存在時會直接沿用；缺少安全標記、遠端 Auth endpoint、provisioning 失敗或任何 capture 錯誤都會讓命令以非零狀態結束。不得以 production 或 remote Firebase 設定執行 capture。
+
+安全檢查完成後，`npm run capture` 會自動：
 
 1. 登入測試帳號
 2. 清除所有舊資料（學生、白板）
