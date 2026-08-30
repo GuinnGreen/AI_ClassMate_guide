@@ -6,3 +6,6 @@ dist/
 .env.local
 .env.*.local
 classmate-ai---智慧班級經營系統/
+
+# Local isolated development worktrees
+.worktrees/
