@@ -252,3 +252,27 @@ test('WebP encoding rejects a successful process that produced an empty artifact
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('WebP encoding cannot mistake an existing artifact for fresh encoder output', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'classmate-guide-stale-webp-'));
+  const encoderPath = path.join(tempDir, 'img2webp');
+  const framePath = path.join(tempDir, 'frame.png');
+  const outputPath = path.join(tempDir, 'output.webp');
+  const previousPath = process.env.PATH;
+  fs.writeFileSync(encoderPath, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(encoderPath, 0o755);
+  fs.writeFileSync(framePath, 'frame');
+  fs.writeFileSync(outputPath, 'known-good-previous-artifact');
+  process.env.PATH = tempDir;
+
+  try {
+    assert.throws(
+      () => combineToWebP([framePath], outputPath),
+      /missing WebP artifact/,
+    );
+    assert.equal(fs.readFileSync(outputPath, 'utf8'), 'known-good-previous-artifact');
+  } finally {
+    process.env.PATH = previousPath;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

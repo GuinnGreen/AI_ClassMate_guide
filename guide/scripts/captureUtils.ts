@@ -1,5 +1,6 @@
 import type { Page } from 'puppeteer';
 import { execFileSync } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -197,6 +198,7 @@ export async function captureFrame(page: Page, outputPath: string) {
 export function combineToWebP(frames: string[], output: string, frameDurationMs = 1500) {
   const dir = path.dirname(output);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const temporaryOutput = `${output}.${randomUUID()}.tmp`;
 
   // Build img2webp command: -loop 0 = infinite loop, -d = duration per frame in ms
   // img2webp -loop 0 -d 1500 frame1.png -d 1500 frame2.png ... -o output.webp
@@ -204,14 +206,17 @@ export function combineToWebP(frames: string[], output: string, frameDurationMs 
   for (const frame of frames) {
     args.push('-d', String(frameDurationMs), '-lossy', '-q', '75', frame);
   }
-  args.push('-o', output);
+  args.push('-o', temporaryOutput);
 
   try {
     execFileSync('img2webp', args, { stdio: 'pipe' });
-    const outputSize = fs.statSync(output).size;
+    if (!fs.existsSync(temporaryOutput)) throw new Error('missing WebP artifact');
+    const outputSize = fs.statSync(temporaryOutput).size;
     if (outputSize <= 0) throw new Error('empty WebP artifact');
+    fs.renameSync(temporaryOutput, output);
     console.log(`  ✅ ${path.basename(output)} (${(outputSize / 1024).toFixed(0)}KB)`);
   } catch (err: unknown) {
+    if (fs.existsSync(temporaryOutput)) fs.unlinkSync(temporaryOutput);
     const e = err as { stderr?: Buffer; message?: string };
     const detail = e.stderr?.toString().trim() || e.message;
     throw new Error(
