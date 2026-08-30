@@ -138,7 +138,7 @@ export async function captureAbsence(page: Page, outputDir: string): Promise<Sce
       await page.evaluate(() => {
         const buttons = document.querySelectorAll('[title*="取消請假"]');
         for (const btn of buttons) {
-          if (btn.offsetParent !== null) {
+          if ((btn as HTMLElement).offsetParent !== null) {
             const rect = btn.getBoundingClientRect();
             const overlay = document.createElement('div');
             overlay.className = '__capture_highlight__';
@@ -162,7 +162,7 @@ export async function captureAbsence(page: Page, outputDir: string): Promise<Sce
       await page.evaluate(() => {
         const btns = document.querySelectorAll('[title*="取消請假"]');
         for (const btn of btns) {
-          if (btn.offsetParent !== null) {
+          if ((btn as HTMLElement).offsetParent !== null) {
             (btn as HTMLElement).click();
             return;
           }

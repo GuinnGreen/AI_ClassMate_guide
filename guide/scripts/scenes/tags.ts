@@ -28,7 +28,7 @@ export async function captureTags(page: Page, outputDir: string): Promise<SceneR
         // Find the first tag/category area
         const headers = document.querySelectorAll('h3, h4, span');
         for (const h of headers) {
-          if (h.textContent?.includes('學習態度') && h.offsetParent !== null) {
+          if (h.textContent?.includes('學習態度') && (h as HTMLElement).offsetParent !== null) {
             const rect = h.getBoundingClientRect();
             const overlay = document.createElement('div');
             overlay.className = '__capture_highlight__';
@@ -121,7 +121,7 @@ export async function captureTags(page: Page, outputDir: string): Promise<SceneR
       await page.evaluate(() => {
         const headers = document.querySelectorAll('h3, h4, span');
         for (const h of headers) {
-          if (h.textContent?.includes('同儕互動') && h.offsetParent !== null) {
+          if (h.textContent?.includes('同儕互動') && (h as HTMLElement).offsetParent !== null) {
             const rect = h.getBoundingClientRect();
             const overlay = document.createElement('div');
             overlay.className = '__capture_highlight__';

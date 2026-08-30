@@ -10,9 +10,23 @@ export async function setupViewport(page: Page) {
   await page.setViewport(VIEWPORT);
 }
 
+export async function assertSafeCaptureEnvironment(page: Page) {
+  const environment = await page.evaluate(() => ({
+    appEnvironment: document.documentElement.dataset.appEnvironment,
+    firebaseEmulators: document.documentElement.dataset.firebaseEmulators,
+  }));
+
+  if (environment.appEnvironment !== 'development' || environment.firebaseEmulators !== 'true') {
+    throw new Error(
+      `Capture refused: expected development + Firebase emulators, received ${JSON.stringify(environment)}`,
+    );
+  }
+}
+
 /** Login to the app */
 export async function login(page: Page, email: string, password: string) {
   await page.goto('http://localhost:3000', { waitUntil: 'networkidle2' });
+  await assertSafeCaptureEnvironment(page);
   await page.waitForSelector('input[type="email"]', { timeout: 10000 });
   await page.type('input[type="email"]', email, { delay: 30 });
   await page.type('input[type="password"]', password, { delay: 30 });
