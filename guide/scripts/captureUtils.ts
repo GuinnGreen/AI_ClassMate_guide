@@ -4,6 +4,24 @@ import fs from 'fs';
 import path from 'path';
 
 const VIEWPORT = { width: 1280, height: 800 };
+export const AUTH_EMULATOR_URL = 'http://127.0.0.1:9099';
+
+interface AuthFetchResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}
+
+type AuthFetch = (url: string, init?: RequestInit) => Promise<AuthFetchResponse>;
+
+interface AuthProvisionOptions {
+  authEmulatorUrl?: string;
+  fetchImpl?: AuthFetch;
+}
+
+interface LoginOptions extends AuthProvisionOptions {
+  postLoginDelayMs?: number;
+}
 
 /** Set up a standard viewport */
 export async function setupViewport(page: Page) {
@@ -23,10 +41,47 @@ export async function assertSafeCaptureEnvironment(page: Page) {
   }
 }
 
+export async function provisionDemoAuthEmulatorAccount(
+  email: string,
+  password: string,
+  options: AuthProvisionOptions = {},
+) {
+  const authEmulatorUrl = (options.authEmulatorUrl ?? AUTH_EMULATOR_URL).replace(/\/$/, '');
+  if (authEmulatorUrl !== AUTH_EMULATOR_URL) {
+    throw new Error(`Auth provisioning refused: expected ${AUTH_EMULATOR_URL}, received ${authEmulatorUrl}`);
+  }
+
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as AuthFetch);
+  const response = await fetchImpl(
+    `${AUTH_EMULATOR_URL}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-classmate-ai`,
+    {
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: false }),
+    },
+  );
+  if (response.ok) return;
+
+  const body = await response.json().catch(() => ({})) as {
+    error?: { message?: string };
+  };
+  if (body.error?.message?.startsWith('EMAIL_EXISTS')) return;
+  throw new Error(
+    `Auth Emulator account provisioning failed (${response.status}): ${body.error?.message ?? 'unknown error'}`,
+  );
+}
+
 /** Login to the app */
-export async function login(page: Page, email: string, password: string) {
+export async function login(
+  page: Page,
+  email: string,
+  password: string,
+  options: LoginOptions = {},
+) {
   await page.goto('http://localhost:3000', { waitUntil: 'networkidle2' });
   await assertSafeCaptureEnvironment(page);
+  await provisionDemoAuthEmulatorAccount(email, password, options);
   await page.waitForSelector('input[type="email"]', { timeout: 10000 });
   await page.type('input[type="email"]', email, { delay: 30 });
   await page.type('input[type="password"]', password, { delay: 30 });
@@ -36,7 +91,7 @@ export async function login(page: Page, email: string, password: string) {
     () => document.body.innerText.includes('學生名單'),
     { timeout: 15000 }
   );
-  await delay(1000);
+  await delay(options.postLoginDelayMs ?? 1000);
 }
 
 /** Highlight an element with a red border overlay + arrow */

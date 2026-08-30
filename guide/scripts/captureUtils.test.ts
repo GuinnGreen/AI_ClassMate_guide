@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Page } from 'puppeteer';
-import { assertSafeCaptureEnvironment, login } from './captureUtils.ts';
+import {
+  AUTH_EMULATOR_URL,
+  assertSafeCaptureEnvironment,
+  login,
+  provisionDemoAuthEmulatorAccount,
+} from './captureUtils.ts';
 
 type Markers = Record<string, string | undefined>;
 
@@ -55,7 +60,7 @@ function fakeLoginPage(markers: Markers) {
       return evaluateWithDocument(markers, pageFunction);
     },
     waitForSelector: async () => { calls.push('waitForSelector'); },
-    type: async () => { calls.push('type'); },
+    type: async (selector: string) => { calls.push(`type:${selector}`); },
     click: async () => { calls.push('click'); },
     waitForFunction: async () => { calls.push('waitForFunction'); },
   } as unknown as Page;
@@ -96,20 +101,101 @@ test('login rejects production before selectors, credentials, or other post-navi
     appEnvironment: 'production',
     firebaseEmulators: 'true',
   });
+  let provisionRequests = 0;
 
   await assert.rejects(
-    login(page, 'placeholder@example.invalid', 'placeholder-password'),
+    login(page, 'placeholder@example.invalid', 'placeholder-password', {
+      fetchImpl: async () => {
+        provisionRequests++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
     { message: 'Capture refused: expected development + Firebase emulators, received {"appEnvironment":"production","firebaseEmulators":"true"}' },
   );
   assert.deepEqual(calls, ['goto', 'evaluate']);
+  assert.equal(provisionRequests, 0);
 });
 
 test('login rejects missing markers before selectors, credentials, or other post-navigation work', async () => {
   const { calls, page } = fakeLoginPage({});
+  let provisionRequests = 0;
 
   await assert.rejects(
-    login(page, 'placeholder@example.invalid', 'placeholder-password'),
+    login(page, 'placeholder@example.invalid', 'placeholder-password', {
+      fetchImpl: async () => {
+        provisionRequests++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
     { message: 'Capture refused: expected development + Firebase emulators, received {}' },
   );
   assert.deepEqual(calls, ['goto', 'evaluate']);
+  assert.equal(provisionRequests, 0);
+});
+
+test('safe login provisions the Auth Emulator account before typing credentials', async () => {
+  const { calls, page } = fakeLoginPage({
+    appEnvironment: 'development',
+    firebaseEmulators: 'true',
+  });
+  const fetchImpl = async (url: string, init?: RequestInit) => {
+    calls.push('provision');
+    assert.equal(url, `${AUTH_EMULATOR_URL}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-classmate-ai`);
+    assert.equal(init?.method, 'POST');
+    assert.equal(init?.redirect, 'error');
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      email: 'test_demo@school.com',
+      password: '123456',
+      returnSecureToken: false,
+    });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ localId: 'demo-user' }),
+    };
+  };
+
+  await login(page, 'test_demo@school.com', '123456', {
+    fetchImpl,
+    postLoginDelayMs: 0,
+  });
+
+  assert.deepEqual(calls.slice(0, 6), [
+    'goto',
+    'evaluate',
+    'provision',
+    'waitForSelector',
+    'type:input[type="email"]',
+    'type:input[type="password"]',
+  ]);
+});
+
+test('Auth Emulator provisioning tolerates an existing demo account', async () => {
+  let requestCount = 0;
+  await provisionDemoAuthEmulatorAccount('test_demo@school.com', '123456', {
+    fetchImpl: async () => {
+      requestCount++;
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: 'EMAIL_EXISTS' } }),
+      };
+    },
+  });
+  assert.equal(requestCount, 1);
+});
+
+test('Auth provisioning refuses a remote endpoint before fetch', async () => {
+  let requestCount = 0;
+  await assert.rejects(
+    provisionDemoAuthEmulatorAccount('test_demo@school.com', '123456', {
+      authEmulatorUrl: 'https://identitytoolkit.googleapis.com',
+      fetchImpl: async () => {
+        requestCount++;
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+    }),
+    /Auth provisioning refused/,
+  );
+  assert.equal(requestCount, 0);
 });

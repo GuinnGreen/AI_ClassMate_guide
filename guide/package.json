@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "capture": "tsx scripts/capture.ts",
     "typecheck": "tsc --noEmit",
-    "test:guard": "node --import tsx --test scripts/captureUtils.test.ts",
+    "test:guard": "node --import tsx --test scripts/*.test.ts",
     "verify": "npm run typecheck && npm run test:guard && npm run build"
   },
   "dependencies": {
