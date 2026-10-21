@@ -13,6 +13,7 @@ import { captureAbsence } from './scenes/absence';
 import { captureTheme } from './scenes/theme';
 import { captureCsvExport } from './scenes/csvExport';
 import { captureArchive } from './scenes/archive';
+import { runCaptureCli } from './captureRunner';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUTPUT_DIR = path.resolve(__dirname, '../public/images');
@@ -73,13 +74,19 @@ async function main() {
       console.log(`  ${r.name}.webp`);
     }
   } catch (err) {
-    console.error('❌ Capture failed:', err);
     // Take a debug screenshot
-    await page.screenshot({ path: path.join(OUTPUT_DIR, 'debug-error.png') });
-    console.log('  Debug screenshot saved to debug-error.png');
+    try {
+      await page.screenshot({ path: path.join(OUTPUT_DIR, 'debug-error.png') });
+      console.log('  Debug screenshot saved to debug-error.png');
+    } catch (screenshotError) {
+      console.error('  Failed to save debug screenshot:', screenshotError);
+    }
+    throw err;
   } finally {
     await browser.close();
   }
 }
 
-main();
+void runCaptureCli(main).catch((error) => {
+  console.error('❌ Capture failed:', error);
+});

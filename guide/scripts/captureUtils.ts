@@ -1,18 +1,88 @@
 import type { Page } from 'puppeteer';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 
 const VIEWPORT = { width: 1280, height: 800 };
+export const AUTH_EMULATOR_URL = 'http://127.0.0.1:9099';
+
+interface AuthFetchResponse {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}
+
+type AuthFetch = (url: string, init?: RequestInit) => Promise<AuthFetchResponse>;
+
+interface AuthProvisionOptions {
+  authEmulatorUrl?: string;
+  fetchImpl?: AuthFetch;
+}
+
+interface LoginOptions extends AuthProvisionOptions {
+  postLoginDelayMs?: number;
+}
 
 /** Set up a standard viewport */
 export async function setupViewport(page: Page) {
   await page.setViewport(VIEWPORT);
 }
 
+export async function assertSafeCaptureEnvironment(page: Page) {
+  const environment = await page.evaluate(() => ({
+    appEnvironment: document.documentElement.dataset.appEnvironment,
+    firebaseEmulators: document.documentElement.dataset.firebaseEmulators,
+  }));
+
+  if (environment.appEnvironment !== 'development' || environment.firebaseEmulators !== 'true') {
+    throw new Error(
+      `Capture refused: expected development + Firebase emulators, received ${JSON.stringify(environment)}`,
+    );
+  }
+}
+
+export async function provisionDemoAuthEmulatorAccount(
+  email: string,
+  password: string,
+  options: AuthProvisionOptions = {},
+) {
+  const authEmulatorUrl = (options.authEmulatorUrl ?? AUTH_EMULATOR_URL).replace(/\/$/, '');
+  if (authEmulatorUrl !== AUTH_EMULATOR_URL) {
+    throw new Error(`Auth provisioning refused: expected ${AUTH_EMULATOR_URL}, received ${authEmulatorUrl}`);
+  }
+
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as AuthFetch);
+  const response = await fetchImpl(
+    `${AUTH_EMULATOR_URL}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo-classmate-ai`,
+    {
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: false }),
+    },
+  );
+  if (response.ok) return;
+
+  const body = await response.json().catch(() => ({})) as {
+    error?: { message?: string };
+  };
+  if (body.error?.message?.startsWith('EMAIL_EXISTS')) return;
+  throw new Error(
+    `Auth Emulator account provisioning failed (${response.status}): ${body.error?.message ?? 'unknown error'}`,
+  );
+}
+
 /** Login to the app */
-export async function login(page: Page, email: string, password: string) {
+export async function login(
+  page: Page,
+  email: string,
+  password: string,
+  options: LoginOptions = {},
+) {
   await page.goto('http://localhost:3000', { waitUntil: 'networkidle2' });
+  await assertSafeCaptureEnvironment(page);
+  await provisionDemoAuthEmulatorAccount(email, password, options);
   await page.waitForSelector('input[type="email"]', { timeout: 10000 });
   await page.type('input[type="email"]', email, { delay: 30 });
   await page.type('input[type="password"]', password, { delay: 30 });
@@ -22,7 +92,7 @@ export async function login(page: Page, email: string, password: string) {
     () => document.body.innerText.includes('學生名單'),
     { timeout: 15000 }
   );
-  await delay(1000);
+  await delay(options.postLoginDelayMs ?? 1000);
 }
 
 /** Highlight an element with a red border overlay + arrow */
@@ -128,6 +198,7 @@ export async function captureFrame(page: Page, outputPath: string) {
 export function combineToWebP(frames: string[], output: string, frameDurationMs = 1500) {
   const dir = path.dirname(output);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const temporaryOutput = `${output}.${randomUUID()}.tmp`;
 
   // Build img2webp command: -loop 0 = infinite loop, -d = duration per frame in ms
   // img2webp -loop 0 -d 1500 frame1.png -d 1500 frame2.png ... -o output.webp
@@ -135,14 +206,23 @@ export function combineToWebP(frames: string[], output: string, frameDurationMs 
   for (const frame of frames) {
     args.push('-d', String(frameDurationMs), '-lossy', '-q', '75', frame);
   }
-  args.push('-o', output);
+  args.push('-o', temporaryOutput);
 
   try {
-    execSync(`img2webp ${args.map(a => `"${a}"`).join(' ')}`, { stdio: 'pipe' });
-    console.log(`  ✅ ${path.basename(output)} (${(fs.statSync(output).size / 1024).toFixed(0)}KB)`);
+    execFileSync('img2webp', args, { stdio: 'pipe' });
+    if (!fs.existsSync(temporaryOutput)) throw new Error('missing WebP artifact');
+    const outputSize = fs.statSync(temporaryOutput).size;
+    if (outputSize <= 0) throw new Error('empty WebP artifact');
+    fs.renameSync(temporaryOutput, output);
+    console.log(`  ✅ ${path.basename(output)} (${(outputSize / 1024).toFixed(0)}KB)`);
   } catch (err: unknown) {
-    const e = err as { stderr?: Buffer };
-    console.error(`  ❌ Failed to create ${path.basename(output)}: ${e.stderr?.toString()}`);
+    if (fs.existsSync(temporaryOutput)) fs.unlinkSync(temporaryOutput);
+    const e = err as { stderr?: Buffer; message?: string };
+    const detail = e.stderr?.toString().trim() || e.message;
+    throw new Error(
+      `Failed to create ${path.basename(output)}${detail ? `: ${detail}` : ''}`,
+      { cause: err },
+    );
   }
 }
 
